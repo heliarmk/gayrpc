@@ -14,31 +14,31 @@
 #include <gayrpc/core/GayRpcTypeHandler.h>
 #include <gayrpc/core/GayRpcHelper.h>
 
-namespace gayrpc::core {
+namespace gayrpc::core
+{
 
     class WaitResponseTimer final
     {
     public:
         WaitResponseTimer(uint64_t seqID, std::chrono::nanoseconds lastTime)
-            :
-            mEndTime(std::chrono::steady_clock::now() + lastTime),
-            mSeqID(seqID)
+            : mEndTime(std::chrono::steady_clock::now() + lastTime),
+              mSeqID(seqID)
         {
         }
 
-        const std::chrono::steady_clock::time_point& getEndTime() const
+        const std::chrono::steady_clock::time_point &getEndTime() const
         {
             return mEndTime;
         }
 
-        uint64_t    getSeqID() const
+        uint64_t getSeqID() const
         {
             return mSeqID;
         }
 
     private:
-        std::chrono::steady_clock::time_point   mEndTime;
-        uint64_t                                mSeqID;
+        std::chrono::steady_clock::time_point mEndTime;
+        uint64_t mSeqID;
     };
 
     class BaseClient : public std::enable_shared_from_this<BaseClient>
@@ -49,22 +49,22 @@ namespace gayrpc::core {
         using NetworkThreadChecker = std::function<bool(void)>;
 
     public:
-        const RpcTypeHandleManager::Ptr&    getTypeHandleManager() const
+        const RpcTypeHandleManager::Ptr &getTypeHandleManager() const
         {
             return mTypeHandleManager;
         }
 
-        const UnaryServerInterceptor&       getInInterceptor() const
+        const UnaryServerInterceptor &getInInterceptor() const
         {
             return mInboundInterceptor;
         }
 
-        const UnaryServerInterceptor&       getOutInterceptor() const
+        const UnaryServerInterceptor &getOutInterceptor() const
         {
             return mOutboundInterceptor;
         }
 
-        bool                                inInNetworkThread() const
+        bool inInNetworkThread() const
         {
             std::shared_lock<std::shared_mutex> lock(mNetworkThreadCheckerMutex);
             if (mNetworkThreadChecker == nullptr)
@@ -74,21 +74,21 @@ namespace gayrpc::core {
             return mNetworkThreadChecker();
         }
 
-        void                                setNetworkThreadChecker(NetworkThreadChecker checker)
+        void setNetworkThreadChecker(NetworkThreadChecker checker)
         {
             std::unique_lock<std::shared_mutex> lock(mNetworkThreadCheckerMutex);
             mNetworkThreadChecker = std::move(checker);
         }
 
-        void    checkTimeout()
+        void checkTimeout()
         {
-            std::vector< TimeoutCallback>  callbacks;
+            std::vector<TimeoutCallback> callbacks;
             {
                 std::lock_guard<std::mutex> lck(mStubMapGuard);
                 const auto now = std::chrono::steady_clock::now();
                 while (!mWaitResponseTimerQueue.empty())
                 {
-                    const auto& head = mWaitResponseTimerQueue.top();
+                    const auto &head = mWaitResponseTimerQueue.top();
                     if (head.getEndTime() > now)
                     {
                         break;
@@ -103,49 +103,48 @@ namespace gayrpc::core {
                     mWaitResponseTimerQueue.pop();
                 }
             }
-            for (auto& callback : callbacks)
+            for (auto &callback : callbacks)
             {
                 callback();
             }
         }
 
     protected:
-        BaseClient(RpcTypeHandleManager::Ptr  rpcHandlerManager,
-            UnaryServerInterceptor  inboundInterceptor,
-            UnaryServerInterceptor  outboundInterceptor)
-            :
-            mTypeHandleManager(std::move(rpcHandlerManager)),
-            mInboundInterceptor(std::move(inboundInterceptor)),
-            mOutboundInterceptor(std::move(outboundInterceptor)),
-            mSequenceID(0)
-        {}
+        BaseClient(RpcTypeHandleManager::Ptr rpcHandlerManager,
+                   UnaryServerInterceptor inboundInterceptor,
+                   UnaryServerInterceptor outboundInterceptor)
+            : mTypeHandleManager(std::move(rpcHandlerManager)),
+              mInboundInterceptor(std::move(inboundInterceptor)),
+              mOutboundInterceptor(std::move(outboundInterceptor)),
+              mSequenceID(0)
+        {
+        }
 
         virtual ~BaseClient() = default;
 
-        template<typename Response, typename Request, typename Handle>
-        void call(const Request& request,
+        template <typename Response, typename Request, typename Handle>
+        void call(const Request &request,
                   ServiceIDType serviceID,
                   ServiceFunctionMsgIDType msgID,
-                  const Handle& handle,
+                  const Handle &handle,
                   std::chrono::seconds timeout,
-                  TimeoutCallback&& timeoutCallback)
+                  TimeoutCallback &&timeoutCallback)
         {
             const auto sequenceID = mSequenceID++;
 
             RpcMeta meta = makeRequestRpcMeta(sequenceID,
-                serviceID,
-                msgID,
-                RpcMeta_DataEncodingType_BINARY,
-                true);
+                                              serviceID,
+                                              msgID,
+                                              RpcMeta_DataEncodingType_BINARY,
+                                              true);
             meta.mutable_request_info()->set_timeout(static_cast<uint64_t>(timeout.count()));
 
             {
                 WaitResponseTimer waitTimer(sequenceID, timeout);
-                auto callback = [handle](RpcMeta && meta,
-                                         const std::string_view & data,
-                                         const UnaryServerInterceptor & inboundInterceptor,
-                                         InterceptorContextType&& context)
-                {
+                auto callback = [handle](RpcMeta &&meta,
+                                         const std::string_view &data,
+                                         const UnaryServerInterceptor &inboundInterceptor,
+                                         InterceptorContextType &&context) {
                     return parseResponseWrapper<Response>(handle,
                                                           std::move(meta),
                                                           data,
@@ -154,6 +153,7 @@ namespace gayrpc::core {
                 };
 
                 std::lock_guard<std::mutex> lck(mStubMapGuard);
+                // 确认不存在这个sequenceID
                 assert(mStubHandleMap.find(sequenceID) == mStubHandleMap.end());
                 assert(mTimeoutHandleMap.find(sequenceID) == mTimeoutHandleMap.end());
 
@@ -162,30 +162,30 @@ namespace gayrpc::core {
                 mWaitResponseTimerQueue.push(waitTimer);
             }
 
+            // TODO the ananas library
             mOutboundInterceptor(
-                    std::move(meta),
-                    request,
-                    [](RpcMeta&&, const google::protobuf::Message&, InterceptorContextType&& context)
-                    {
-                        return ananas::MakeReadyFuture(std::optional<std::string>(std::nullopt));
-                    },
-                    InterceptorContextType{});
+                std::move(meta),
+                request,
+                [](RpcMeta &&, const google::protobuf::Message &, InterceptorContextType &&context) {
+                    return ananas::MakeReadyFuture(std::optional<std::string>(std::nullopt));
+                },
+                InterceptorContextType{});
         }
 
-        template<typename Response, typename Request, typename Handle>
-        void call(const Request& request,
-            ServiceIDType serviceID,
-            ServiceFunctionMsgIDType msgID,
-            const Handle& handle = nullptr)
+        template <typename Response, typename Request, typename Handle>
+        void call(const Request &request,
+                  ServiceIDType serviceID,
+                  ServiceFunctionMsgIDType msgID,
+                  const Handle &handle = nullptr)
         {
             const auto sequenceID = mSequenceID++;
             const auto expectResponse = (handle != nullptr);
 
             RpcMeta meta = makeRequestRpcMeta(sequenceID,
-                serviceID,
-                msgID,
-                RpcMeta_DataEncodingType_BINARY,
-                expectResponse);
+                                              serviceID,
+                                              msgID,
+                                              RpcMeta_DataEncodingType_BINARY,
+                                              expectResponse);
             meta.mutable_request_info()->set_timeout(0);
 
             if (expectResponse)
@@ -193,11 +193,10 @@ namespace gayrpc::core {
                 std::lock_guard<std::mutex> lck(mStubMapGuard);
                 assert(mStubHandleMap.find(sequenceID) == mStubHandleMap.end());
 
-                mStubHandleMap[sequenceID] = [handle](RpcMeta && meta,
-                                                      const std::string_view & data,
-                                                      const UnaryServerInterceptor & inboundInterceptor,
-                                                      InterceptorContextType&& context)
-                {
+                mStubHandleMap[sequenceID] = [handle](RpcMeta &&meta,
+                                                      const std::string_view &data,
+                                                      const UnaryServerInterceptor &inboundInterceptor,
+                                                      InterceptorContextType &&context) {
                     return parseResponseWrapper<Response>(handle,
                                                           std::move(meta),
                                                           data,
@@ -206,23 +205,22 @@ namespace gayrpc::core {
                 };
             }
 
-            mOutboundInterceptor(std::move(meta),
-                    request,
-                    [](RpcMeta&&, const google::protobuf::Message&, InterceptorContextType&& context)
-                    {
-                        return ananas::MakeReadyFuture(std::optional<std::string>(std::nullopt));
-                    },
-                    InterceptorContextType{});
+            mOutboundInterceptor(
+                std::move(meta),
+                request,
+                [](RpcMeta &&, const google::protobuf::Message &, InterceptorContextType &&context) {
+                    return ananas::MakeReadyFuture(std::optional<std::string>(std::nullopt));
+                },
+                InterceptorContextType{});
         }
 
-        void    installResponseStub(const gayrpc::core::RpcTypeHandleManager::Ptr& rpcTypeHandleManager,
-            ServiceIDType serviceID)
+        void installResponseStub(const gayrpc::core::RpcTypeHandleManager::Ptr &rpcTypeHandleManager,
+                                 ServiceIDType serviceID)
         {
             auto sharedThis = shared_from_this();
-            auto responseStub = [sharedThis](RpcMeta&& meta,
-                                             const std::string_view & data,
-                                             InterceptorContextType&& context)
-            {
+            auto responseStub = [sharedThis](RpcMeta &&meta,
+                                             const std::string_view &data,
+                                             InterceptorContextType &&context) {
                 sharedThis->processRpcResponse(std::move(meta), data, std::move(context));
                 return true;
             };
@@ -230,7 +228,7 @@ namespace gayrpc::core {
         }
 
     private:
-        void    processRpcResponse(RpcMeta&& meta, const std::string_view& data, InterceptorContextType&& context)
+        void processRpcResponse(RpcMeta &&meta, const std::string_view &data, InterceptorContextType &&context)
         {
             assert(meta.type() == RpcMeta::RESPONSE);
             if (meta.type() != RpcMeta::RESPONSE)
@@ -256,7 +254,7 @@ namespace gayrpc::core {
                     timeoutHandler = std::move((*it).second);
                     mTimeoutHandleMap.erase(it);
                 }
-                if(timeoutHandler)
+                if (timeoutHandler)
                 {
                     timeoutHandler();
                 }
@@ -274,7 +272,7 @@ namespace gayrpc::core {
                 if (it == mStubHandleMap.end())
                 {
                     throw std::runtime_error("not found response seq id:" +
-                        std::to_string(sequenceID));
+                                             std::to_string(sequenceID));
                 }
                 handle = std::move(it->second);
                 mStubHandleMap.erase(it);
@@ -285,38 +283,39 @@ namespace gayrpc::core {
     private:
         using ResponseStubHandle =
             std::function<
-            InterceptorReturnType(
-                RpcMeta&&,
-                const std::string_view& data,
-                const UnaryServerInterceptor&,
-                InterceptorContextType&& context)>;
+                InterceptorReturnType(
+                    RpcMeta &&,
+                    const std::string_view &data,
+                    const UnaryServerInterceptor &,
+                    InterceptorContextType &&context)>;
         using ResponseStubHandleMap = std::unordered_map<uint64_t, ResponseStubHandle>;
         using TimeoutHandleMap = std::unordered_map<uint64_t, TimeoutCallback>;
 
-        const RpcTypeHandleManager::Ptr     mTypeHandleManager;
-        const UnaryServerInterceptor        mInboundInterceptor;
-        const UnaryServerInterceptor        mOutboundInterceptor;
+        const RpcTypeHandleManager::Ptr mTypeHandleManager;
+        const UnaryServerInterceptor mInboundInterceptor;
+        const UnaryServerInterceptor mOutboundInterceptor;
 
-        std::atomic<uint64_t>               mSequenceID;
-        std::mutex                          mStubMapGuard;
-        ResponseStubHandleMap               mStubHandleMap;
-        TimeoutHandleMap                    mTimeoutHandleMap;
+        std::atomic<uint64_t> mSequenceID;
+        std::mutex mStubMapGuard;
+        ResponseStubHandleMap mStubHandleMap;
+        TimeoutHandleMap mTimeoutHandleMap;
 
         class CompareWaitResponseTimer
         {
         public:
-            bool operator() (const WaitResponseTimer& left, const WaitResponseTimer& right) const
+            bool operator()(const WaitResponseTimer &left, const WaitResponseTimer &right) const
             {
                 return left.getEndTime() > right.getEndTime();
             }
         };
 
         std::priority_queue<WaitResponseTimer,
-                std::vector<WaitResponseTimer>,
-                CompareWaitResponseTimer>  mWaitResponseTimerQueue;
+                            std::vector<WaitResponseTimer>,
+                            CompareWaitResponseTimer>
+            mWaitResponseTimerQueue;
 
-        mutable std::shared_mutex           mNetworkThreadCheckerMutex;
-        NetworkThreadChecker                mNetworkThreadChecker;
+        mutable std::shared_mutex mNetworkThreadCheckerMutex;
+        NetworkThreadChecker mNetworkThreadChecker;
     };
 
-}
+} // namespace gayrpc::core
