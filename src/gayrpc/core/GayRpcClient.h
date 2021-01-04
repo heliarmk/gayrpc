@@ -122,6 +122,7 @@ namespace gayrpc::core
 
         virtual ~BaseClient() = default;
 
+        // 带超时回调的call
         template <typename Response, typename Request, typename Handle>
         void call(const Request &request,
                   ServiceIDType serviceID,
@@ -137,10 +138,12 @@ namespace gayrpc::core
                                               msgID,
                                               RpcMeta_DataEncodingType_BINARY,
                                               true);
+            // std::chrono::seconds.count() 返回值是一个有符号的35bit整数
             meta.mutable_request_info()->set_timeout(static_cast<uint64_t>(timeout.count()));
 
             {
                 WaitResponseTimer waitTimer(sequenceID, timeout);
+                // 发出request的回调
                 auto callback = [handle](RpcMeta &&meta,
                                          const std::string_view &data,
                                          const UnaryServerInterceptor &inboundInterceptor,
@@ -152,8 +155,9 @@ namespace gayrpc::core
                                                           std::move(context));
                 };
 
+                // c++17 后lock_guard 可以用scope_guard代替
                 std::lock_guard<std::mutex> lck(mStubMapGuard);
-                // 确认不存在这个sequenceID
+                // 确认不存在这个sequenceID, 存在就是处理过了，重复处理, 不过这儿直接assert?
                 assert(mStubHandleMap.find(sequenceID) == mStubHandleMap.end());
                 assert(mTimeoutHandleMap.find(sequenceID) == mTimeoutHandleMap.end());
 
@@ -169,9 +173,12 @@ namespace gayrpc::core
                 [](RpcMeta &&, const google::protobuf::Message &, InterceptorContextType &&context) {
                     return ananas::MakeReadyFuture(std::optional<std::string>(std::nullopt));
                 },
+                // 初始化contextType, 这货是个map
                 InterceptorContextType{});
         }
 
+        // typename 标识Request/Response/Handle都是个类
+        // 不带超时回调的call
         template <typename Response, typename Request, typename Handle>
         void call(const Request &request,
                   ServiceIDType serviceID,
@@ -179,6 +186,7 @@ namespace gayrpc::core
                   const Handle &handle = nullptr)
         {
             const auto sequenceID = mSequenceID++;
+            // 不带超时回调的call里，不一定会需要response, 而带超时回调的肯定都有response（否则超时回调没有意义了，这里的超时指的是response返回超时）
             const auto expectResponse = (handle != nullptr);
 
             RpcMeta meta = makeRequestRpcMeta(sequenceID,
@@ -214,16 +222,17 @@ namespace gayrpc::core
                 InterceptorContextType{});
         }
 
-        void installResponseStub(const gayrpc::core::RpcTypeHandleManager::Ptr &rpcTypeHandleManager,
-                                 ServiceIDType serviceID)
+        void installResponseStub(const gayrpc::core::RpcTypeHandleManager::Ptr &rpcTypeHandleManager, ServiceIDType serviceID)
         {
             auto sharedThis = shared_from_this();
             auto responseStub = [sharedThis](RpcMeta &&meta,
                                              const std::string_view &data,
                                              InterceptorContextType &&context) {
+                // 这里不用判断sharedThis指向的那个对象delete的情况么？
                 sharedThis->processRpcResponse(std::move(meta), data, std::move(context));
                 return true;
             };
+            // 这个handle manager在外部初始化的？
             rpcTypeHandleManager->registerTypeHandle(RpcMeta::RESPONSE, responseStub, serviceID);
         }
 
@@ -238,6 +247,7 @@ namespace gayrpc::core
 
             //TODO::remove it's mWaitResponseTimerQueue
             const auto sequenceID = meta.response_info().sequence_id();
+            // timeout response
             if (meta.response_info().timeout())
             {
                 TimeoutCallback timeoutHandler;
@@ -262,6 +272,7 @@ namespace gayrpc::core
                 return;
             }
 
+            // no timeout response
             ResponseStubHandle handle;
             {
                 std::lock_guard<std::mutex> lck(mStubMapGuard);
@@ -277,17 +288,15 @@ namespace gayrpc::core
                 handle = std::move(it->second);
                 mStubHandleMap.erase(it);
             }
+            // 在call()中添加的callback
             handle(std::move(meta), data, mInboundInterceptor, std::move(context));
         }
 
     private:
-        using ResponseStubHandle =
-            std::function<
-                InterceptorReturnType(
-                    RpcMeta &&,
-                    const std::string_view &data,
-                    const UnaryServerInterceptor &,
-                    InterceptorContextType &&context)>;
+        using ResponseStubHandle = std::function<InterceptorReturnType(RpcMeta &&,
+                                                                       const std::string_view &data,
+                                                                       const UnaryServerInterceptor &,
+                                                                       InterceptorContextType &&context)>;
         using ResponseStubHandleMap = std::unordered_map<uint64_t, ResponseStubHandle>;
         using TimeoutHandleMap = std::unordered_map<uint64_t, TimeoutCallback>;
 
